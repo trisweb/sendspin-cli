@@ -197,6 +197,7 @@ echo -e "\n${C}Installing Sendspin...${N}"
 if sudo -u "$DAEMON_USER" bash -l -c "uv tool list" 2>/dev/null | grep -q "^sendspin "; then
     echo -e "${D}Sendspin already installed, upgrading...${N}"
     sudo -u "$DAEMON_USER" bash -l -c "uv tool upgrade sendspin" || { echo -e "${R}Failed${N}"; exit 1; }
+    echo -e "  ${C}Release notes:${N} https://github.com/Sendspin/sendspin-cli/releases"
 else
     sudo -u "$DAEMON_USER" bash -l -c "uv tool install sendspin" || { echo -e "${R}Failed${N}"; exit 1; }
 fi
