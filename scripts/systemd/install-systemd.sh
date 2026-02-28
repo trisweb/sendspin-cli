@@ -216,127 +216,60 @@ generate_client_id() {
 CONFIG_DIR="$DAEMON_HOME/.config/sendspin"
 CONFIG_FILE="$CONFIG_DIR/settings-daemon.json"
 
-# Defaults pulled from existing config (for upgrades)
-EXISTING_NAME=""
-EXISTING_CLIENT_ID=""
-EXISTING_DEVICE=""
-EXISTING_DELAY="0"
-EXISTING_VOLUME="25"
-EXISTING_MUTED="false"
-EXISTING_LOG_LEVEL="null"
-EXISTING_LISTEN_PORT="null"
-EXISTING_LAST_SERVER="null"
-EXISTING_MPRIS="false"
-
-if [ -f "$CONFIG_FILE" ]; then
-    echo -e "\n${C}Found existing config, loading defaults for upgrade...${N}"
-
-    # Extract an unquoted string value from the one-value-per-line JSON config.
-    # Returns empty string for null or non-string values.
-    json_str() {
-        local raw
-        raw=$(grep "\"$1\":" "$CONFIG_FILE" 2>/dev/null | head -1 \
-            | sed 's/^ *"[^"]*": *//' | sed 's/[[:space:],]*$//')
-        case "$raw" in
-            \"*\") echo "$raw" | sed 's/^"\(.*\)"$/\1/' ;;
-            *)     echo "" ;;
-        esac
-    }
-
-    # Extract a raw JSON value (null, number, boolean, or "quoted string").
-    json_raw() {
-        grep "\"$1\":" "$CONFIG_FILE" 2>/dev/null | head -1 \
-            | sed 's/^ *"[^"]*": *//' | sed 's/[[:space:],]*$//' || echo "null"
-    }
-
-    EXISTING_NAME=$(json_str name)
-    EXISTING_CLIENT_ID=$(json_str client_id)
-    EXISTING_DEVICE=$(json_str audio_device)
-    EXISTING_DELAY=$(json_raw static_delay_ms)
-    EXISTING_VOLUME=$(json_raw player_volume)
-    EXISTING_MUTED=$(json_raw player_muted)
-    EXISTING_LOG_LEVEL=$(json_raw log_level)
-    EXISTING_LISTEN_PORT=$(json_raw listen_port)
-    EXISTING_LAST_SERVER=$(json_raw last_server_url)
-    EXISTING_MPRIS=$(json_raw use_mpris)
-fi
-
-# Load legacy env-var config if it exists (one-time migration)
-OLD_CONFIG="/etc/default/sendspin"
-
-if [ -f "$OLD_CONFIG" ]; then
-    echo -e "\n${C}Found legacy config, migrating...${N}"
-    source "$OLD_CONFIG"
-    # Legacy values only apply when no JSON config exists yet
-    [ -z "$EXISTING_NAME" ]   && EXISTING_NAME="$SENDSPIN_CLIENT_NAME"
-    [ -z "$EXISTING_DEVICE" ] && EXISTING_DEVICE="$SENDSPIN_AUDIO_DEVICE"
-    [ "$EXISTING_DELAY" = "0" ] && EXISTING_DELAY="${SENDSPIN_STATIC_DELAY_MS:-0}"
-fi
-
-# Configure
-echo -e "\n${C}Configuration${N}"
-NAME=$(prompt_input "Client name" "${EXISTING_NAME:-$(hostname)}")
-DEFAULT_CLIENT_ID="${EXISTING_CLIENT_ID:-$(generate_client_id "$NAME")}"
-CLIENT_ID=$(prompt_input "Client ID" "$DEFAULT_CLIENT_ID")
-
-echo -e "\n${C}Audio Devices${N}"
-# List audio devices - try to detect session environment for accuracy
+# Detect runtime dir/UID for audio device listing and service file
 DAEMON_USER_UID=$(id -u "$DAEMON_USER")
 DAEMON_RUNTIME_DIR="/run/user/$DAEMON_USER_UID"
-DAEMON_DBUS=""
 
-# Try to get DBUS address from user's session (or current session for dedicated user)
-if [ -d "$DAEMON_RUNTIME_DIR" ]; then
-    DAEMON_DBUS=$(ps -u "$DAEMON_USER" e | grep -m1 'DBUS_SESSION_BUS_ADDRESS=' | sed 's/.*DBUS_SESSION_BUS_ADDRESS=\([^ ]*\).*/\1/' || true)
-    [ -z "$DAEMON_DBUS" ] && DAEMON_DBUS="unix:path=$DAEMON_RUNTIME_DIR/bus"
-fi
-
-# Run with environment variables if available
-if [ -n "$DAEMON_DBUS" ]; then
-    sudo -u "$DAEMON_USER" env XDG_RUNTIME_DIR="$DAEMON_RUNTIME_DIR" DBUS_SESSION_BUS_ADDRESS="$DAEMON_DBUS" "$SENDSPIN_BIN" --list-audio-devices 2>&1 | head -n -2
+if [ -f "$CONFIG_FILE" ]; then
+    echo -e "\n${G}✓${N} Existing config detected at ${B}$CONFIG_FILE${N} — keeping it as-is."
 else
-    sudo -u "$DAEMON_USER" "$SENDSPIN_BIN" --list-audio-devices 2>&1 | head -n -2 || echo -e "${D}(Audio devices will be detected when daemon starts)${N}"
-fi
+    # No existing config — prompt and create one
+    echo -e "\n${C}Configuration${N}"
+    NAME=$(prompt_input "Client friendly name (shown in the UI)" "$(hostname)")
+    DEFAULT_CLIENT_ID="$(generate_client_id "$NAME")"
+    CLIENT_ID=$(prompt_input "Client ID (used in settings and scripts)" "$DEFAULT_CLIENT_ID")
 
-DEVICE=$(prompt_input "Audio device" "${EXISTING_DEVICE:-default}")
-[ "$DEVICE" = "default" ] && DEVICE=""
+    echo -e "\n${C}Audio Devices${N}"
+    # List audio devices - try to detect session environment for accuracy
+    DAEMON_DBUS=""
+    if [ -d "$DAEMON_RUNTIME_DIR" ]; then
+        DAEMON_DBUS=$(ps -u "$DAEMON_USER" e | grep -m1 'DBUS_SESSION_BUS_ADDRESS=' | sed 's/.*DBUS_SESSION_BUS_ADDRESS=\([^ ]*\).*/\1/' || true)
+        [ -z "$DAEMON_DBUS" ] && DAEMON_DBUS="unix:path=$DAEMON_RUNTIME_DIR/bus"
+    fi
 
-# Preserve non-prompted settings from existing config; fall back to install-time defaults
-USE_MPRIS="${EXISTING_MPRIS:-false}"
-VOLUME="${EXISTING_VOLUME:-25}"
-MUTED="${EXISTING_MUTED:-false}"
-LOG_LEVEL="${EXISTING_LOG_LEVEL:-null}"
-LISTEN_PORT="${EXISTING_LISTEN_PORT:-null}"
-LAST_SERVER="${EXISTING_LAST_SERVER:-null}"
+    if [ -n "$DAEMON_DBUS" ]; then
+        sudo -u "$DAEMON_USER" env XDG_RUNTIME_DIR="$DAEMON_RUNTIME_DIR" DBUS_SESSION_BUS_ADDRESS="$DAEMON_DBUS" "$SENDSPIN_BIN" --list-audio-devices 2>&1 | head -n -2
+    else
+        sudo -u "$DAEMON_USER" "$SENDSPIN_BIN" --list-audio-devices 2>&1 | head -n -2 || echo -e "${D}(Audio devices will be detected when daemon starts)${N}"
+    fi
 
-# Create config directory
-sudo -u "$DAEMON_USER" mkdir -p "$CONFIG_DIR"
+    DEVICE=$(prompt_input "Audio device" "default")
+    [ "$DEVICE" = "default" ] && DEVICE=""
 
-# Save config in JSON format
-DEVICE_JSON="null"
-[ -n "$DEVICE" ] && DEVICE_JSON="\"$DEVICE\""
+    # Create config directory and write only the prompted settings;
+    # all other options are omitted so the daemon uses its built-in defaults.
+    sudo -u "$DAEMON_USER" mkdir -p "$CONFIG_DIR"
 
-DELAY_VALUE="${EXISTING_DELAY:-0.0}"
-
-sudo -u "$DAEMON_USER" tee "$CONFIG_FILE" > /dev/null << EOF
+    if [ -n "$DEVICE" ]; then
+        sudo -u "$DAEMON_USER" tee "$CONFIG_FILE" > /dev/null << EOF
+// Info on all available sendspin-cli options is available at: https://github.com/Sendspin/sendspin-cli#configuration-options
 {
   "name": "$NAME",
-  "log_level": $LOG_LEVEL,
-  "listen_port": $LISTEN_PORT,
-  "player_volume": $VOLUME,
-  "player_muted": $MUTED,
-  "static_delay_ms": $DELAY_VALUE,
-  "last_server_url": $LAST_SERVER,
   "client_id": "$CLIENT_ID",
-  "audio_device": $DEVICE_JSON,
-  "use_mpris": $USE_MPRIS
+  "audio_device": "$DEVICE"
 }
 EOF
+    else
+        sudo -u "$DAEMON_USER" tee "$CONFIG_FILE" > /dev/null << EOF
+// Info on all available sendspin-cli options is available at: https://github.com/Sendspin/sendspin-cli#configuration-options
+{
+  "name": "$NAME",
+  "client_id": "$CLIENT_ID"
+}
+EOF
+    fi
 
-# Clean up old config file if it exists
-if [ -f "$OLD_CONFIG" ]; then
-    echo -e "${G}✓${N} Migrated config, removing old file"
-    rm -f "$OLD_CONFIG"
+    echo -e "${G}✓${N} Config written to $CONFIG_FILE"
 fi
 
 # Check if service is currently running (to determine if we need to restart)
