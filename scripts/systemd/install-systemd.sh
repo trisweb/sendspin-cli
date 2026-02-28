@@ -212,25 +212,71 @@ generate_client_id() {
     echo "$name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]\+/-/g' | sed 's/^-\+\|-\+$//g'
 }
 
-# Load old config if it exists (for migration)
+# Paths for current JSON config
+CONFIG_DIR="$DAEMON_HOME/.config/sendspin"
+CONFIG_FILE="$CONFIG_DIR/settings-daemon.json"
+
+# Defaults pulled from existing config (for upgrades)
+EXISTING_NAME=""
+EXISTING_CLIENT_ID=""
+EXISTING_DEVICE=""
+EXISTING_DELAY="0"
+EXISTING_VOLUME="25"
+EXISTING_MUTED="false"
+EXISTING_LOG_LEVEL="null"
+EXISTING_LISTEN_PORT="null"
+EXISTING_LAST_SERVER="null"
+EXISTING_MPRIS="false"
+
+if [ -f "$CONFIG_FILE" ]; then
+    echo -e "\n${C}Found existing config, loading defaults for upgrade...${N}"
+
+    # Extract an unquoted string value from the one-value-per-line JSON config.
+    # Returns empty string for null or non-string values.
+    json_str() {
+        local raw
+        raw=$(grep "\"$1\":" "$CONFIG_FILE" 2>/dev/null | head -1 \
+            | sed 's/^ *"[^"]*": *//' | sed 's/[[:space:],]*$//')
+        case "$raw" in
+            \"*\") echo "$raw" | sed 's/^"\(.*\)"$/\1/' ;;
+            *)     echo "" ;;
+        esac
+    }
+
+    # Extract a raw JSON value (null, number, boolean, or "quoted string").
+    json_raw() {
+        grep "\"$1\":" "$CONFIG_FILE" 2>/dev/null | head -1 \
+            | sed 's/^ *"[^"]*": *//' | sed 's/[[:space:],]*$//' || echo "null"
+    }
+
+    EXISTING_NAME=$(json_str name)
+    EXISTING_CLIENT_ID=$(json_str client_id)
+    EXISTING_DEVICE=$(json_str audio_device)
+    EXISTING_DELAY=$(json_raw static_delay_ms)
+    EXISTING_VOLUME=$(json_raw player_volume)
+    EXISTING_MUTED=$(json_raw player_muted)
+    EXISTING_LOG_LEVEL=$(json_raw log_level)
+    EXISTING_LISTEN_PORT=$(json_raw listen_port)
+    EXISTING_LAST_SERVER=$(json_raw last_server_url)
+    EXISTING_MPRIS=$(json_raw use_mpris)
+fi
+
+# Load legacy env-var config if it exists (one-time migration)
 OLD_CONFIG="/etc/default/sendspin"
-OLD_NAME=""
-OLD_DEVICE=""
-OLD_DELAY="0"
 
 if [ -f "$OLD_CONFIG" ]; then
-    echo -e "\n${C}Found existing config, migrating...${N}"
-    # Source the old config to get values
+    echo -e "\n${C}Found legacy config, migrating...${N}"
     source "$OLD_CONFIG"
-    OLD_NAME="$SENDSPIN_CLIENT_NAME"
-    OLD_DEVICE="$SENDSPIN_AUDIO_DEVICE"
-    OLD_DELAY="${SENDSPIN_STATIC_DELAY_MS:-0}"
+    # Legacy values only apply when no JSON config exists yet
+    [ -z "$EXISTING_NAME" ]   && EXISTING_NAME="$SENDSPIN_CLIENT_NAME"
+    [ -z "$EXISTING_DEVICE" ] && EXISTING_DEVICE="$SENDSPIN_AUDIO_DEVICE"
+    [ "$EXISTING_DELAY" = "0" ] && EXISTING_DELAY="${SENDSPIN_STATIC_DELAY_MS:-0}"
 fi
 
 # Configure
 echo -e "\n${C}Configuration${N}"
-NAME=$(prompt_input "Client name" "${OLD_NAME:-$(hostname)}")
-DEFAULT_CLIENT_ID=$(generate_client_id "$NAME")
+NAME=$(prompt_input "Client name" "${EXISTING_NAME:-$(hostname)}")
+DEFAULT_CLIENT_ID="${EXISTING_CLIENT_ID:-$(generate_client_id "$NAME")}"
 CLIENT_ID=$(prompt_input "Client ID" "$DEFAULT_CLIENT_ID")
 
 echo -e "\n${C}Audio Devices${N}"
@@ -252,34 +298,35 @@ else
     sudo -u "$DAEMON_USER" "$SENDSPIN_BIN" --list-audio-devices 2>&1 | head -n -2 || echo -e "${D}(Audio devices will be detected when daemon starts)${N}"
 fi
 
-DEVICE=$(prompt_input "Audio device" "${OLD_DEVICE:-default}")
+DEVICE=$(prompt_input "Audio device" "${EXISTING_DEVICE:-default}")
 [ "$DEVICE" = "default" ] && DEVICE=""
 
-# MPRIS disabled by default (user can enable manually in config if needed)
-USE_MPRIS=false
+# Preserve non-prompted settings from existing config; fall back to install-time defaults
+USE_MPRIS="${EXISTING_MPRIS:-false}"
+VOLUME="${EXISTING_VOLUME:-25}"
+MUTED="${EXISTING_MUTED:-false}"
+LOG_LEVEL="${EXISTING_LOG_LEVEL:-null}"
+LISTEN_PORT="${EXISTING_LISTEN_PORT:-null}"
+LAST_SERVER="${EXISTING_LAST_SERVER:-null}"
 
 # Create config directory
-CONFIG_DIR="$DAEMON_HOME/.config/sendspin"
-CONFIG_FILE="$CONFIG_DIR/settings-daemon.json"
 sudo -u "$DAEMON_USER" mkdir -p "$CONFIG_DIR"
 
-# Save config in new JSON format
-# Create JSON with conditional fields (null if empty)
+# Save config in JSON format
 DEVICE_JSON="null"
 [ -n "$DEVICE" ] && DEVICE_JSON="\"$DEVICE\""
 
-# Use old delay value if it was set
-DELAY_VALUE="${OLD_DELAY:-0.0}"
+DELAY_VALUE="${EXISTING_DELAY:-0.0}"
 
 sudo -u "$DAEMON_USER" tee "$CONFIG_FILE" > /dev/null << EOF
 {
   "name": "$NAME",
-  "log_level": null,
-  "listen_port": null,
-  "player_volume": 25,
-  "player_muted": false,
+  "log_level": $LOG_LEVEL,
+  "listen_port": $LISTEN_PORT,
+  "player_volume": $VOLUME,
+  "player_muted": $MUTED,
   "static_delay_ms": $DELAY_VALUE,
-  "last_server_url": null,
+  "last_server_url": $LAST_SERVER,
   "client_id": "$CLIENT_ID",
   "audio_device": $DEVICE_JSON,
   "use_mpris": $USE_MPRIS
