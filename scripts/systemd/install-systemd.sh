@@ -140,6 +140,11 @@ elif [ "$USE_DEDICATED_USER" = true ]; then
     echo -e "${D}User 'sendspin' already exists${N}"
 fi
 
+# Enable linger so the user's systemd session (and PipeWire/PulseAudio) starts
+# at boot without requiring an interactive login
+loginctl enable-linger "$DAEMON_USER" 2>/dev/null || true
+echo -e "${G}✓${N} Linger enabled for $DAEMON_USER"
+
 echo -e "${D}Daemon will run as: ${B}$DAEMON_USER${N}"
 
 # Detect package manager
@@ -306,6 +311,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=$DAEMON_USER
+Environment=XDG_RUNTIME_DIR=/run/user/$DAEMON_USER_UID
 ExecStart=$SENDSPIN_BIN daemon
 Restart=on-failure
 RestartSec=10
