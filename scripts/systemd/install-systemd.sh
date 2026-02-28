@@ -252,7 +252,6 @@ else
 
     if [ -n "$DEVICE" ]; then
         sudo -u "$DAEMON_USER" tee "$CONFIG_FILE" > /dev/null << EOF
-// Info on all available sendspin-cli options is available at: https://github.com/Sendspin/sendspin-cli#configuration-options
 {
   "name": "$NAME",
   "client_id": "$CLIENT_ID",
@@ -261,7 +260,6 @@ else
 EOF
     else
         sudo -u "$DAEMON_USER" tee "$CONFIG_FILE" > /dev/null << EOF
-// Info on all available sendspin-cli options is available at: https://github.com/Sendspin/sendspin-cli#configuration-options
 {
   "name": "$NAME",
   "client_id": "$CLIENT_ID"
